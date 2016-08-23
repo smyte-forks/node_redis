@@ -645,7 +645,7 @@ RedisClient.prototype.connection_gone = function (why, error) {
     }
 
     // Retry commands after a reconnect instead of throwing an error. Use this with caution
-    if (this.options.retry_unfulfilled_commands) {
+    if (why === 'goaway' || this.options.retry_unfulfilled_commands) {
         this.offline_queue.unshift.apply(this.offline_queue, this.command_queue.toArray());
         this.command_queue.clear();
     } else if (this.command_queue.length !== 0) {
@@ -671,6 +671,12 @@ RedisClient.prototype.connection_gone = function (why, error) {
 };
 
 RedisClient.prototype.return_error = function (err) {
+    if (err.message === 'GOAWAY') {
+      this.emit('goaway');
+      this.connection_gone('goaway');
+      return;
+    }
+
     var command_obj = this.command_queue.shift();
     if (command_obj.error) {
         err.stack = command_obj.error.stack.replace(/^Error.*?\n/, 'ReplyError: ' + err.message + '\n');
