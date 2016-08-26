@@ -127,6 +127,7 @@ function RedisClient (options, stream) {
     this.command_queue = new Queue(); // Holds sent commands to de-pipeline them
     this.offline_queue = new Queue(); // Holds commands issued but not able to be sent
     this.pipeline_queue = new Queue(); // Holds all pipelined commands
+    this.command_timeout = +options.command_timeout || null;
     // ATTENTION: connect_timeout should change in v.3.0 so it does not count towards ending reconnection attempts after x seconds
     // This should be done by the retry_strategy. Instead it should only be the timeout for connecting to redis
     this.connect_timeout = +options.connect_timeout || 3600000; // 60 * 60 * 1000 ms
@@ -351,10 +352,8 @@ RedisClient.prototype.flush_and_error = function (error_attributes, options) {
             if (command_obj.error) {
                 err.stack = err.stack + command_obj.error.stack.replace(/^Error.*?\n/, '\n');
             }
-            err.command = command_obj.command.toUpperCase();
-            if (command_obj.args && command_obj.args.length) {
-                err.args = command_obj.args;
-            }
+
+            command_obj.appendDetailToError(err);
             if (options.error) {
                 err.origin = options.error;
             }
@@ -527,8 +526,12 @@ RedisClient.prototype.ready_check = function () {
 
 RedisClient.prototype.send_offline_queue = function () {
     for (var command_obj = this.offline_queue.shift(); command_obj; command_obj = this.offline_queue.shift()) {
-        debug('Sending offline command: ' + command_obj.command);
-        this.internal_send_command(command_obj);
+        if (command_obj.timeout === true) {
+            debug('Timed out offline command: ' + command_obj.command);
+        } else {
+            debug('Sending offline command: ' + command_obj.command);
+            this.internal_send_command(command_obj);
+        }
     }
     this.drain();
 };
@@ -646,8 +649,11 @@ RedisClient.prototype.connection_gone = function (why, error) {
 
     // Retry commands after a reconnect instead of throwing an error. Use this with caution
     if (why === 'goaway' || this.options.retry_unfulfilled_commands) {
-        this.offline_queue.unshift.apply(this.offline_queue, this.command_queue.toArray());
-        this.command_queue.clear();
+        var cmd = this.command_queue.pop();
+        while (cmd) {
+          this.offline_queue.unshift(cmd);
+          cmd = this.command_queue.pop();
+        }
     } else if (this.command_queue.length !== 0) {
         this.flush_and_error({
             message: 'Redis connection lost and command aborted.',
@@ -681,10 +687,7 @@ RedisClient.prototype.return_error = function (err) {
     if (command_obj.error) {
         err.stack = command_obj.error.stack.replace(/^Error.*?\n/, 'ReplyError: ' + err.message + '\n');
     }
-    err.command = command_obj.command.toUpperCase();
-    if (command_obj.args && command_obj.args.length) {
-        err.args = command_obj.args;
-    }
+    command_obj.appendDetailToError(err);
 
     // Count down pub sub mode if in entering modus
     if (this.pub_sub_mode > 1) {
@@ -937,6 +940,10 @@ RedisClient.prototype.internal_send_command = function (command_obj) {
     if (typeof this.options.rename_commands !== 'undefined' && this.options.rename_commands[command]) {
         command = this.options.rename_commands[command];
     }
+
+    // If this command times out give it a reference to our connection
+    command_obj.client = this;
+
     // Always use 'Multi bulk commands', but if passed any Buffer args, then do multiple writes, one for each arg.
     // This means that using Buffers in commands is going to be slower, so use Strings if you don't already have a Buffer.
     command_str = '*' + (len + 1) + '\r\n$' + command.length + '\r\n' + command + '\r\n';
