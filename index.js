@@ -940,7 +940,7 @@ RedisClient.prototype.internal_send_command = function (command_obj) {
             args_copy[i] = this.options.prefix + args_copy[i];
         }
     }
-    if (typeof this.options.rename_commands !== 'undefined' && this.options.rename_commands[command]) {
+    if (this.options.rename_commands && this.options.rename_commands[command]) {
         command = this.options.rename_commands[command];
     }
 
