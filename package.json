@@ -1,6 +1,6 @@
 {
   "name": "redis",
-  "version": "2.6.2-smyte-5",
+  "version": "2.8.0-smyte-0",
   "description": "Redis client library",
   "keywords": [
     "database",
